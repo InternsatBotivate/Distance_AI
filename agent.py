@@ -16,8 +16,10 @@ from geopy.extra.rate_limiter import RateLimiter
 
 # from google_maps_api import geocode
 from dotenv import load_dotenv
-
 load_dotenv()
+
+APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL")
+
 
 STATE_MAP = {
     "A.P": "Andhra Pradesh",
@@ -56,7 +58,7 @@ How to work:
 2. If asked for the closest company or vendor to a given location:  
    - Compare distances and return the closest company.   
    - Find the longitude and latitude user mentioned using the `get_location` tool if the address is not available or mentioned in `state["companies"]`.
-   - Call the `get_distance` tool to calculate distances.  
+   - Call the `get_distance` tool to calculate distances and duration from the location.  
    - Do not use `get_location` tool for the companies in `state["companies"]`.
 3. If asked about a company's address, city, or state, fetch it directly from `state["companies"]`.  
 4. Always introduce yourself as Diya in the first message.  
@@ -70,6 +72,7 @@ Your output should either be:
 
 Never ignore the `companies` dataset. Never fabricate data.
 Give quick and crisp replies. Do not ask follow up questions.
+Give distance when asked about closest location.
 """
 
 
@@ -83,45 +86,46 @@ def is_in_india(lat: float, lon: float) -> bool:
     return 6 <= lat <= 38 and 68 <= lon <= 98
 
 
+
 @tool
-def get_distance(start: List[str], end: List[str]) -> float:
+def get_distance(start: List[str], end: List[str]) -> Dict[str, str]:
     """
-    Calculate the distance between two locations using the formula.
+    Call the Google Apps Script API to calculate the driving distance and duration 
+    between two locations by route (not straight-line).
 
     Args:
         start: [latitude, longitude] of the starting point as strings.
         end: [latitude, longitude] of the destination point as strings.
 
     Returns:
-        Distance between the two locations in the chosen unit as a float in Kilometers.
+        A dictionary with:
+          - distance: Distance in kilometers as a string (e.g., "5.2 km")
+          - duration: Estimated travel time as a string (e.g., "12 mins")
     """
-    # Convert to floats
-    lat1, lon1 = map(float, start)
-    lat2, lon2 = map(float, end)
+    if not APPS_SCRIPT_URL:
+        raise ValueError("APPS_SCRIPT_URL environment variable is not set.")
 
-    # Convert degrees to radians
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    params = {
+        "lat1": start[0],
+        "lon1": start[1],
+        "lat2": end[0],
+        "lon2": end[1]
+    }
 
-    # Haversine formula
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.asin(math.sqrt(a))
+    response = requests.get(APPS_SCRIPT_URL, params=params)
+    response.raise_for_status()
+    data = response.json()
 
-    # Radius of Earth
-    r_km = 6371.0
-
-    return c * r_km
-
+    return {
+        "distance": data["distance"],
+        "duration": data["duration"]
+    }
 
 @tool
 def get_location(addresses: List[str]) -> Dict[str, List[str]]:
     """
     Given one or more address strings, fetch their corresponding geographic
-    information.
+    information. Only when data not available in `state["companies"]`
 
     Args:
         addresses: Variable number of address strings in a list.
@@ -163,7 +167,7 @@ def get_location(addresses: List[str]) -> Dict[str, List[str]]:
 
 tools = [get_location, get_distance]
 
-llm = ChatOpenAI(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY")).bind_tools(
+llm = ChatOpenAI(model="gpt-4.1", api_key=os.getenv("OPENAI_API_KEY")).bind_tools(
     tools
 )
 
